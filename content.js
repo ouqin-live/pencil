@@ -1,6 +1,7 @@
 // Pencil 网页涂鸦 - content script
 // 注入一个全屏 Canvas 覆盖层 + 悬浮工具栏，实现画笔 / 橡皮擦 / 颜色 / 粗细 / 清空 / 撤销重做。
-// 涂鸦以“页面坐标”存储，随页面内容滚动；样式与页面完全隔离（Shadow DOM）。
+// 涂鸦锚定在绘制处的内容上（内嵌滚动容器内容坐标或页面文档坐标），随内容滚动；
+// 样式与页面完全隔离（Shadow DOM）。
 
 (() => {
   if (window.__pencilInjected) return;
@@ -173,8 +174,10 @@
 
   /* ------------------------------------------------------------------ *
    * 笔画模型与历史
-   * 每笔记录为“页面坐标”下的点序列（含颜色与粗细），渲染时叠加当前滚动
-   * 偏移，因此滚动页面时涂鸦跟随页面内容移动。
+   * 每笔记录为锚定坐标系下的点序列（含颜色与粗细）：笔落在内嵌滚动容器
+   * 内时锚定到该容器的内容坐标，否则锚定到页面文档坐标。渲染时叠加
+   * “容器/窗口当前位置”推出的偏移，因此整页滚动、内嵌容器滚动（以及
+   * 容器本身被带动）时，涂鸦都跟随内容移动。
    * 撤销 / 重做基于笔画列表的版本引用，内存开销极小。
    * ------------------------------------------------------------------ */
   let strokes = []; // 已提交的笔画（按渲染顺序）
@@ -210,7 +213,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * 渲染引擎：把页面坐标的笔画映射到视口画布
+   * 渲染引擎：把笔画从各自锚定坐标系映射到视口画布
    * ------------------------------------------------------------------ */
   let renderScheduled = false;
   function scheduleRender() {
@@ -225,8 +228,193 @@
   // 页面滚动（含内部滚动容器）时重绘，让涂鸦跟随内容移动
   document.addEventListener("scroll", scheduleRender, { capture: true, passive: true });
 
-  function applyTransform() {
-    ctx.setTransform(dpr, 0, 0, dpr, -window.scrollX * dpr, -window.scrollY * dpr);
+  /* ------------------------------------------------------------------ *
+   * 内嵌容器滚动转发
+   * 涂鸦模式下画布覆盖全屏且 pointer-events: auto，滚轮事件的命中目标变成
+   * 画布；Chrome 只会滚动画布的最近可滚动祖先（即整页），画布下方的内嵌
+   * 滚动容器收不到滚轮，表现为“画笔状态下内部无法滚动”。这里手动把滚轮
+   * 派发给指针下方最近的可滚动祖先；找不到时保持默认行为（整页滚动）。
+   * ------------------------------------------------------------------ */
+  canvas.addEventListener("wheel", forwardWheel, { passive: false });
+
+  function forwardWheel(e) {
+    if (!state.active || e.ctrlKey) return; // ctrl+滚轮是页面缩放，保持默认
+
+    // deltaMode：0=像素 1=行 2=页，统一换算成像素
+    let dx = e.deltaX;
+    let dy = e.deltaY;
+    if (e.deltaMode === 1) {
+      dx *= 16;
+      dy *= 16;
+    } else if (e.deltaMode === 2) {
+      dx *= window.innerWidth;
+      dy *= window.innerHeight;
+    }
+    if (!dx && !dy) return;
+
+    const scroller = findScrollableAt(e.clientX, e.clientY, dx, dy);
+    if (!scroller) return; // 没有内嵌滚动容器：不拦截，交给默认行为滚整页
+
+    scroller.scrollBy(dx, dy);
+    e.preventDefault();
+  }
+
+  function findScrollableAt(x, y, dx, dy) {
+    let node = deepestUnderPoint(x, y);
+    while (node && node !== document.body && node !== document.documentElement) {
+      if (canScrollBy(node, dx, dy)) return node;
+      node = nextAncestor(node);
+    }
+    return null;
+  }
+
+  // 取指针下方最深的真实元素（跳过本扩展的 overlay，钻进开放 Shadow DOM）
+  function deepestUnderPoint(x, y) {
+    const els = document.elementsFromPoint
+      ? document.elementsFromPoint(x, y)
+      : [document.elementFromPoint(x, y)];
+    let start = els.find((el) => el && el !== host && !shadow.contains(el));
+    if (!start) return null;
+
+    // 逐层钻进开放 Shadow DOM，取最深的元素
+    for (let i = 0; start.shadowRoot && i < 10; i++) {
+      const inner = start.shadowRoot.elementFromPoint(x, y);
+      if (!inner || inner === start) break;
+      start = inner;
+    }
+    return start;
+  }
+
+  function nextAncestor(node) {
+    if (node.parentElement) return node.parentElement;
+    const root = node.getRootNode();
+    return root && root.host ? root.host : null; // 跨出 Shadow DOM 回到宿主
+  }
+
+  // 绘制起点下方最近的可滚动容器（不看当前滚动方向，只看内容是否溢出），
+  // 用于把笔画锚定到容器内容坐标；找不到则锚定到页面文档坐标
+  function findScrollAnchor(x, y) {
+    let node = deepestUnderPoint(x, y);
+    while (node && node !== document.body && node !== document.documentElement) {
+      if (canEverScroll(node)) return node;
+      node = nextAncestor(node);
+    }
+    return null;
+  }
+
+  function canEverScroll(el) {
+    if (!(el instanceof Element) || el === host || shadow.contains(el)) return false;
+    const s = getComputedStyle(el);
+    if (
+      /(auto|scroll|overlay)/.test(s.overflowY) &&
+      el.scrollHeight > el.clientHeight + 1
+    ) {
+      return true;
+    }
+    if (
+      /(auto|scroll|overlay)/.test(s.overflowX) &&
+      el.scrollWidth > el.clientWidth + 1
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  function canScrollBy(el, dx, dy) {
+    if (!(el instanceof Element)) return false;
+    const s = getComputedStyle(el);
+    if (
+      dy !== 0 &&
+      /(auto|scroll|overlay)/.test(s.overflowY) &&
+      (dy > 0
+        ? el.scrollTop + el.clientHeight < el.scrollHeight - 1
+        : el.scrollTop > 0)
+    ) {
+      return true;
+    }
+    if (
+      dx !== 0 &&
+      /(auto|scroll|overlay)/.test(s.overflowX) &&
+      (dx > 0
+        ? el.scrollLeft + el.clientWidth < el.scrollWidth - 1
+        : el.scrollLeft > 0)
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  // 笔画的“屏幕偏移”：屏幕坐标 = 笔画坐标 + offset。
+  // 锚定容器时由容器当前视口位置与滚动量推出（自然涵盖容器自身滚动、被
+  // 外层滚动带动、页面重排等所有移动）；锚定文档时即 window 滚动的反向
+  // 量。容器被移除后沿用最后一帧的 offset。
+  function strokeOffset(s) {
+    if (s.anchor && s.anchor.isConnected) {
+      const r = s.anchor.getBoundingClientRect();
+      const offset = {
+        x: r.left - s.anchor.scrollLeft,
+        y: r.top - s.anchor.scrollTop,
+      };
+      s.lastOffset = offset;
+      return offset;
+    }
+    if (s.anchor) {
+      // 容器已被移除：沿用最后一帧的偏移冻结渲染
+      return s.lastOffset || { x: -window.scrollX, y: -window.scrollY };
+    }
+    // 锚定页面文档：偏移始终按当前 window 滚动计算
+    return { x: -window.scrollX, y: -window.scrollY };
+  }
+
+  // 视口在笔画坐标系中的范围（用于按包围盒剔除视口外的笔画）
+  function strokeVisible(s, offset) {
+    const b = s.bbox;
+    const vx0 = -offset.x;
+    const vy0 = -offset.y;
+    const vx1 = vx0 + window.innerWidth;
+    const vy1 = vy0 + window.innerHeight;
+    return !(b.x1 < vx0 || b.x0 > vx1 || b.y1 < vy0 || b.y0 > vy1);
+  }
+
+  // 锚定容器当前可见的内容窗口（笔画坐标系）：容器内容滚出这一窗口的
+  // 部分会被裁掉。返回 null 表示不裁剪（未锚定容器，或容器已被移除）。
+  function anchorClipRect(s) {
+    if (!s.anchor || !s.anchor.isConnected) return null;
+    const a = s.anchor;
+    return {
+      x: a.scrollLeft + a.clientLeft,
+      y: a.scrollTop + a.clientTop,
+      w: a.clientWidth,
+      h: a.clientHeight,
+    };
+  }
+
+  // 在锚定容器的可见窗口内绘制；整笔完全滚出窗口时不画。
+  // 调用前需先把变换设置到该笔画的坐标系。
+  function withAnchorClip(s, paint) {
+    const clip = anchorClipRect(s);
+    if (!clip) {
+      paint();
+      return;
+    }
+    const b = s.bbox;
+    if (
+      b &&
+      (b.x1 < clip.x || b.x0 > clip.x + clip.w || b.y1 < clip.y || b.y0 > clip.y + clip.h)
+    ) {
+      return; // 包围盒整体在可见窗口之外，整笔跳过
+    }
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(clip.x, clip.y, clip.w, clip.h);
+    ctx.clip();
+    paint();
+    ctx.restore();
+  }
+
+  function applyTransform(s) {
+    const o = s ? strokeOffset(s) : { x: -window.scrollX, y: -window.scrollY };
+    ctx.setTransform(dpr, 0, 0, dpr, o.x * dpr, o.y * dpr);
   }
 
   function renderStroke(s) {
@@ -263,31 +451,36 @@
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.globalCompositeOperation = "source-over";
 
-    applyTransform();
-    const vx0 = window.scrollX;
-    const vy0 = window.scrollY;
-    const vx1 = vx0 + window.innerWidth;
-    const vy1 = vy0 + window.innerHeight;
-
     for (const s of strokes) {
-      const b = s.bbox;
-      if (b.x1 < vx0 || b.x0 > vx1 || b.y1 < vy0 || b.y0 > vy1) continue; // 视口外跳过
-      renderStroke(s);
+      const offset = strokeOffset(s);
+      if (!strokeVisible(s, offset)) continue; // 视口外跳过
+      ctx.setTransform(dpr, 0, 0, dpr, offset.x * dpr, offset.y * dpr);
+      withAnchorClip(s, () => renderStroke(s));
     }
-    if (currentStroke) renderStroke(currentStroke);
+    if (currentStroke) {
+      const offset = strokeOffset(currentStroke);
+      ctx.setTransform(dpr, 0, 0, dpr, offset.x * dpr, offset.y * dpr);
+      withAnchorClip(currentStroke, () => renderStroke(currentStroke));
+    }
 
     ctx.globalCompositeOperation = "source-over";
-    // 若正在绘制中，重绘后把增量路径的起点接回原位
-    if (drawing && currentStroke) reseedIncrementalPath();
   }
 
   /* ------------------------------------------------------------------ *
-   * 绘制逻辑（页面坐标系）
+   * 绘制逻辑（锚定坐标系）
    * ------------------------------------------------------------------ */
   let drawing = false;
   let currentStroke = null;
 
-  function toWorld(e) {
+  // 指针位置 → 当前笔画的锚定坐标（strokeOffset 的逆变换）
+  function toStrokeCoord(e, s) {
+    if (s.anchor) {
+      const r = s.anchor.getBoundingClientRect();
+      return {
+        x: e.clientX - r.left + s.anchor.scrollLeft,
+        y: e.clientY - r.top + s.anchor.scrollTop,
+      };
+    }
     return { x: e.clientX + window.scrollX, y: e.clientY + window.scrollY };
   }
 
@@ -320,7 +513,7 @@
     canvas.style.cursor = `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${half} ${half}, cell`;
   }
 
-  // 维护笔画包围盒（页面坐标），用于滚动重绘时剔除视口外的笔画
+  // 维护笔画包围盒（锚定坐标），用于滚动重绘时剔除视口外的笔画
   function growBBox(s, x, y) {
     const r = s.width / 2 + 2;
     if (!s.bbox) {
@@ -330,20 +523,6 @@
       s.bbox.y0 = Math.min(s.bbox.y0, y - r);
       s.bbox.x1 = Math.max(s.bbox.x1, x + r);
       s.bbox.y1 = Math.max(s.bbox.y1, y + r);
-    }
-  }
-
-  // 整屏重绘若发生在笔画中途（例如绘制时滚动页面），
-  // 把增量贝塞尔路径的当前位置接回最后一个中点，保证后续笔迹连续
-  function reseedIncrementalPath() {
-    const pts = currentStroke.points;
-    ctx.beginPath();
-    if (pts.length <= 1) {
-      ctx.moveTo(pts[0].x, pts[0].y);
-    } else {
-      const a = pts[pts.length - 2];
-      const b = pts[pts.length - 1];
-      ctx.moveTo((a.x + b.x) / 2, (a.y + b.y) / 2);
     }
   }
 
@@ -361,38 +540,50 @@
       width: strokeWidth(),
       points: [],
       bbox: null,
+      anchor: findScrollAnchor(e.clientX, e.clientY), // 起点下方最近的可滚动容器
+      lastOffset: null,
     };
-    const p = toWorld(e);
+    const p = toStrokeCoord(e, currentStroke);
     currentStroke.points.push(p);
     growBBox(currentStroke, p.x, p.y);
+    // 预置屏幕偏移（client − 笔画坐标），容器若在首帧渲染前被移除也能按此冻结
+    currentStroke.lastOffset = { x: e.clientX - p.x, y: e.clientY - p.y };
 
-    applyTransform();
+    applyTransform(currentStroke);
     applyStrokeStyle(currentStroke);
     // 点按也留下一个圆点
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, currentStroke.width / 2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.moveTo(p.x, p.y);
+    withAnchorClip(currentStroke, () => {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, currentStroke.width / 2, 0, Math.PI * 2);
+      ctx.fill();
+    });
   });
 
   canvas.addEventListener("pointermove", (e) => {
     if (!drawing || !currentStroke) return;
-    const p = toWorld(e);
+    const p = toStrokeCoord(e, currentStroke);
     const pts = currentStroke.points;
     const prev = pts[pts.length - 1];
     pts.push(p);
     growBBox(currentStroke, p.x, p.y);
 
-    applyTransform();
+    applyTransform(currentStroke);
     applyStrokeStyle(currentStroke);
     // 二次贝塞尔平滑：以相邻两点中点为控制终点
     const mx = (prev.x + p.x) / 2;
     const my = (prev.y + p.y) / 2;
-    ctx.quadraticCurveTo(prev.x, prev.y, mx, my);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(mx, my);
+    withAnchorClip(currentStroke, () => {
+      ctx.beginPath();
+      // 本段起点 = 上一对点的中点（第一段从起点开始画）
+      if (pts.length >= 3) {
+        const a = pts[pts.length - 3];
+        ctx.moveTo((a.x + prev.x) / 2, (a.y + prev.y) / 2);
+      } else {
+        ctx.moveTo(prev.x, prev.y);
+      }
+      ctx.quadraticCurveTo(prev.x, prev.y, mx, my);
+      ctx.stroke();
+    });
   });
 
   function endStroke(e) {
@@ -400,11 +591,18 @@
     drawing = false;
     if (currentStroke) {
       const pts = currentStroke.points;
-      applyTransform();
+      applyTransform(currentStroke);
       applyStrokeStyle(currentStroke);
-      const last = pts[pts.length - 1];
-      ctx.lineTo(last.x, last.y);
-      ctx.stroke();
+      // 收尾：从最后一段的中点补画到落点
+      withAnchorClip(currentStroke, () => {
+        if (pts.length < 2) return;
+        const prev = pts[pts.length - 2];
+        const last = pts[pts.length - 1];
+        ctx.beginPath();
+        ctx.moveTo((prev.x + last.x) / 2, (prev.y + last.y) / 2);
+        ctx.lineTo(last.x, last.y);
+        ctx.stroke();
+      });
       ctx.globalCompositeOperation = "source-over";
       const finished = currentStroke;
       currentStroke = null;

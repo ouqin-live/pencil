@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pencil 滚动跟随测试页</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f5f6f8;
+    color: #222;
+    padding-bottom: 80px;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 24px 20px; }
+  h1 { font-size: 20px; margin: 8px 0 16px; }
+
+  .howto {
+    background: #fff;
+    border: 1px solid #e3e6ea;
+    border-radius: 12px;
+    padding: 16px 20px;
+    line-height: 1.9;
+    font-size: 14px;
+  }
+  .howto h2 { font-size: 15px; margin: 0 0 8px; }
+  .howto ol { margin: 0; padding-left: 20px; }
+  .howto code {
+    background: #f1f3f5;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 13px;
+  }
+
+  .filler {
+    min-height: 65vh;
+    margin: 24px 0;
+    border: 2px dashed #c9ced6;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    line-height: 2;
+    color: #66707c;
+    font-size: 14px;
+    background: repeating-linear-gradient(45deg, #fbfcfd, #fbfcfd 18px, #f3f5f8 18px, #f3f5f8 36px);
+  }
+
+  .chat {
+    margin: 24px 0;
+    border: 1px solid #e3e6ea;
+    border-radius: 14px;
+    background: #fff;
+    overflow: hidden;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, .04);
+  }
+  .chat-header {
+    padding: 12px 18px;
+    font-weight: 600;
+    font-size: 14px;
+    border-bottom: 1px solid #eceff2;
+    background: #fafbfc;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .chat-header small { font-weight: 400; color: #8a929c; }
+  .messages {
+    height: 440px;
+    overflow-y: auto;
+    padding: 16px 18px;
+    background: #f7f8fa;
+  }
+  .msg { display: flex; margin-bottom: 14px; }
+  .msg.right { flex-direction: row-reverse; }
+  .idx {
+    flex: 0 0 auto;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: #4a80f5;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    margin: 0 8px;
+  }
+  .msg.right .idx { background: #34b37e; }
+  .bubble {
+    max-width: 70%;
+    background: #fff;
+    border: 1px solid #e8ebef;
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 14px;
+    line-height: 1.7;
+  }
+  .nested-scroll {
+    max-height: 110px;
+    overflow-y: auto;
+    border: 1px solid #dfe3e8;
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin-top: 8px;
+    background: #fbfcfd;
+    font-size: 12px;
+    color: #555;
+    line-height: 1.8;
+  }
+  .chat-input {
+    display: flex;
+    gap: 8px;
+    padding: 10px 14px;
+    border-top: 1px solid #eceff2;
+    background: #fff;
+  }
+  .chat-input input {
+    flex: 1;
+    border: 1px solid #dfe3e8;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 14px;
+    color: #aaa;
+  }
+  .chat-input button {
+    border: 0;
+    border-radius: 8px;
+    background: #4a80f5;
+    color: #fff;
+    padding: 8px 18px;
+    font-size: 14px;
+    opacity: .5;
+  }
+
+  #hud {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    background: rgba(20, 24, 30, .88);
+    color: #d7dde5;
+    font: 12px/1.8 ui-monospace, Menlo, Consolas, monospace;
+    padding: 8px 14px;
+    border-radius: 10px;
+    pointer-events: none;
+  }
+  #hud b { color: #7fb0ff; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Pencil 滚动跟随测试页</h1>
+
+  <div class="howto">
+    <h2>怎么测</h2>
+    <ol>
+      <li>按 <code>Alt+P</code> 或点工具栏 Pencil 图标进入涂鸦模式</li>
+      <li>在聊天窗口里的某条消息上画个圈（推荐 <code>#10</code>，它上面有提示文字）</li>
+      <li>鼠标放在聊天窗口内滚动滚轮 —— 消息在动，圈应该跟着消息一起移动（预期：跟随；滚出列表可见范围的部分被裁掉）</li>
+      <li>继续往下滚，让圈完全离开列表可见范围 —— 圈应完全隐藏，不会漏到窗口外面（预期：隐藏）</li>
+      <li>鼠标移出聊天窗口滚动整页 —— 圈同样应该跟着页面内容一起移动（预期：跟随）</li>
+      <li>再试试 <code>#3</code> 消息里的嵌套滚动小框：在里面画一道，然后滚动这个小框（预期：跟随）</li>
+      <li>右下角面板实时显示整页 scrollY 与内层 scrollTop，方便对照变化</li>
+      <li>注意：若页面用虚拟列表回收 DOM（真实聊天软件常见），跟随可能失效，属于已知边界情况</li>
+    </ol>
+  </div>
+
+  <div class="filler">
+    上方占位区域（约 65vh）<br>
+    用于「鼠标移出聊天窗口后整页滚动」的对比测试
+  </div>
+
+  <div class="chat">
+    <div class="chat-header">
+      <span>内部滚动测试 · 群聊</span>
+      <small>消息列表 overflow-y: auto，共 30 条</small>
+    </div>
+    <div class="messages" id="messages"></div>
+    <div class="chat-input">
+      <input disabled placeholder="这个输入框只是装饰，不参与测试">
+      <button disabled>发送</button>
+    </div>
+  </div>
+
+  <div class="filler">
+    下方占位区域（约 65vh）<br>
+    把整页滚到底再对比一次
+  </div>
+</div>
+
+<div id="hud">
+  <div>整页 scrollY：<b id="v-window">0</b></div>
+  <div>内层 scrollTop：<b id="v-inner">0</b></div>
+</div>
+
+<script>
+  const list = document.getElementById("messages");
+
+  // 轮流使用这些文案，方便识别消息
+  const texts = [
+    "在这条消息上画个圈，然后在列表里滚动：圈应跟着走，滚出可见范围的部分应被裁掉。",
+    "普通消息，可以画个叉做参照物，再滚动对比其他笔画。",
+    "画一条横跨好几条消息的长线，再滚动试试它的行为。",
+    "消息内容本身不重要，重要的是它滚动时涂鸦的相对位置。"
+  ];
+
+  for (let i = 1; i <= 30; i++) {
+    const msg = document.createElement("div");
+    msg.className = "msg" + (i % 2 === 0 ? " right" : "");
+
+    const idx = document.createElement("span");
+    idx.className = "idx";
+    idx.textContent = "#" + i;
+
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+
+    const line = document.createElement("div");
+    line.textContent = "第 " + i + " 条消息（" + texts[(i - 1) % texts.length] + "）";
+    bubble.appendChild(line);
+
+    // #3 里放一个嵌套滚动框
+    if (i === 3) {
+      const nested = document.createElement("div");
+      nested.className = "nested-scroll";
+      for (let j = 1; j <= 20; j++) {
+        const row = document.createElement("div");
+        row.textContent = "嵌套滚动行 " + j + "：这里是一个 overflow-y: auto 的小框";
+        nested.appendChild(row);
+      }
+      bubble.appendChild(nested);
+    }
+
+    // #10 上给个测试提示
+    if (i === 10) {
+      const mark = document.createElement("div");
+      mark.innerHTML = "<b>推荐在这条上画圈测试。</b>";
+      bubble.appendChild(mark);
+    }
+
+    msg.appendChild(idx);
+    msg.appendChild(bubble);
+    list.appendChild(msg);
+  }
+
+  // 右下角实时显示两个滚动值
+  const vWindow = document.getElementById("v-window");
+  const vInner = document.getElementById("v-inner");
+
+  function updateHud() {
+    vWindow.textContent = window.scrollY;
+    vInner.textContent = list.scrollTop;
+  }
+
+  window.addEventListener("scroll", updateHud, { passive: true });
+  list.addEventListener("scroll", updateHud, { passive: true });
+  updateHud();
+</script>
+</body>
+</html>
