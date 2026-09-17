@@ -12,7 +12,7 @@
    * ------------------------------------------------------------------ */
   const state = {
     active: false,
-    tool: "pen", // pen | eraser
+    tool: "pen", // pen | eraser | mouse（鼠标模式：画布让开指针，可正常操作页面）
     color: "#ff9500",
     size: 6,
   };
@@ -70,6 +70,9 @@
       </button>
       <button class="tool" data-tool="eraser" title="橡皮擦">
         <svg viewBox="0 0 24 24"><path d="M16.24 3.56l4.2 4.2a2 2 0 0 1 0 2.83l-8.5 8.5H20v2H6.5l-3.2-3.21a2 2 0 0 1 0-2.83l10.1-10.1a2 2 0 0 1 2.84 0z"/></svg>
+      </button>
+      <button class="tool" data-tool="mouse" title="鼠标（操作页面）">
+        <svg viewBox="0 0 24 24"><path d="M13 1.07V9h7c0-4.08-3.05-7.44-7-7.93zM4 15c0 4.42 3.58 8 8 8s8-3.58 8-8v-4H4v4zm7-13.93C7.05 1.56 4 4.92 4 9v1h7V1.07z"/></svg>
       </button>
     </div>
 
@@ -538,8 +541,13 @@
     ctx.lineJoin = "round";
   }
 
-  // 橡皮擦模式下把光标换成与擦除范围等大的白色方块，便于对准；画笔模式用十字准星
+  // 橡皮擦模式下把光标换成与擦除范围等大的白色方块，便于对准；画笔模式用十字准星；
+  // 鼠标模式下画布不接收指针，光标由页面自己决定
   function updateCursor() {
+    if (state.tool === "mouse") {
+      canvas.style.cursor = "default";
+      return;
+    }
     if (state.tool !== "eraser") {
       canvas.style.cursor = "crosshair";
       return;
@@ -676,6 +684,7 @@
       shadow
         .querySelectorAll(".tool")
         .forEach((b) => b.classList.toggle("active", b === btn));
+      syncCanvasPointer();
       updateCursor();
     });
   });
@@ -687,7 +696,10 @@
     sw.className = "swatch";
     sw.style.background = c;
     sw.title = c;
-    sw.addEventListener("click", () => selectColor(c));
+    sw.addEventListener("click", () => {
+      selectColor(c);
+      savePrefs();
+    });
     colorsRow.appendChild(sw);
   });
   // 自定义颜色
@@ -699,6 +711,7 @@
   colorInput.value = state.color;
   colorInput.addEventListener("input", () => {
     selectColor(colorInput.value, true);
+    savePrefs();
   });
   colorInput.addEventListener("click", (e) => e.stopPropagation());
   custom.appendChild(colorInput);
@@ -728,7 +741,41 @@
     state.size = Number(sizeInput.value);
     sizeVal.textContent = state.size;
     updateCursor(); // 橡皮擦方块光标随粗细同步变化
+    savePrefs();
   });
+
+  // “记住上次设置”：颜色与粗细存入 chrome.storage.local，初始化时恢复；
+  // 写入防抖，拖动滑块时合并为一次
+  let saveTimer = null;
+  function savePrefs() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      try {
+        chrome.storage.local.set({ color: state.color, size: state.size });
+      } catch (e) {}
+    }, 300);
+  }
+  function loadPrefs() {
+    try {
+      chrome.storage.local.get({ color: state.color, size: state.size }, (v) => {
+        if (chrome.runtime.lastError || !v) return;
+        if (typeof v.size === "number") {
+          state.size = Math.max(1, Math.min(40, Math.round(v.size)));
+        }
+        if (typeof v.color === "string") {
+          state.color = v.color;
+          colorInput.value = v.color;
+        }
+        sizeInput.value = String(state.size);
+        sizeVal.textContent = String(state.size);
+        const isPreset = COLORS.some(
+          (p) => p.toLowerCase() === state.color.toLowerCase()
+        );
+        selectColor(state.color, !isPreset);
+        updateCursor(); // 恢复后同步光标尺寸（橡皮擦方块随粗细）
+      });
+    } catch (e) {}
+  }
 
   // 撤销 / 重做 / 清空
   $(".undo").addEventListener("click", undo);
@@ -794,10 +841,17 @@
   /* ------------------------------------------------------------------ *
    * 激活 / 关闭
    * ------------------------------------------------------------------ */
+  // 画布是否接收指针：激活且非鼠标模式时接收（画笔 / 橡皮擦需要绘制）；
+  // 鼠标模式下让开指针事件，页面可正常点击、滚动、悬停
+  function syncCanvasPointer() {
+    canvas.style.pointerEvents =
+      state.active && state.tool !== "mouse" ? "auto" : "none";
+  }
+
   function setActive(on) {
     state.active = on;
     bar.hidden = !on;
-    canvas.style.pointerEvents = on ? "auto" : "none";
+    syncCanvasPointer();
     if (on) scheduleRender(); // 关闭期间页面可能滚动了，重新对齐涂鸦位置
   }
   function toggle() {
@@ -808,6 +862,9 @@
   fitCanvas();
   updateHistoryButtons();
   updateCursor();
+
+  // 恢复上次使用的颜色与粗细
+  loadPrefs();
 
   console.log("[Pencil] 涂鸦模式就绪：涂鸦锚定页面内容并随滚动移动，Alt+P 或点击扩展图标切换");
 })();
