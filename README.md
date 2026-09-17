@@ -12,7 +12,7 @@
 - **粗细**：1–40px 滑块调节
 - **清空**：一键清空全部涂鸦（可撤销）
 - **撤销 / 重做**：按钮或 `Ctrl/Cmd+Z`、`Ctrl/Cmd+Shift+Z`
-- **滚动跟随**：涂鸦在绘制处锚定（起点落在内嵌滚动容器内则锚定容器内容，否则锚定页面文档），整页滚动与容器内部滚动都跟随内容移动，滚出容器可见范围的部分自动隐藏；重绘时按包围盒剔除视口外的笔画
+- **滚动跟随**：涂鸦在绘制处锚定（起点落在内嵌滚动容器内则锚定容器内容，否则锚定页面文档），整页滚动与容器内部滚动都跟随内容移动，滚出容器（或任一外层裁剪容器）可见范围的部分自动隐藏；重绘时按包围盒剔除视口外的笔画
 - **高分屏清晰**：按 `devicePixelRatio` 渲染，Retina 屏不模糊；窗口缩放后涂鸦位置不变
 - **无侵入**：覆盖层与工具栏挂在 Shadow DOM 中，样式与页面完全隔离；仅在需要时注入
 
@@ -44,7 +44,7 @@ docs/           README 截图
 ## 实现要点
 
 - Manifest V3，`activeTab` + `scripting` 按需注入，不常驻页面
-- 每笔记录为锚定坐标下的点序列 `{ tool, color, width, points, bbox, anchor }`：绘制起点落在可滚动容器内时 `anchor` 为该容器、点坐标记在容器内容坐标系，否则 `anchor` 为 null、点坐标记在页面文档坐标系；渲染时由 `anchor.getBoundingClientRect()` 与容器滚动量推出 `setTransform` 偏移，因此整页滚动、内嵌容器滚动（含容器被带动）都跟随，并用 `ctx.clip()` 把笔画裁剪到容器的可见内容窗口（由 `scrollLeft/scrollTop` 与 `clientWidth/clientHeight` 推出），滚出窗口的部分不显示
+- 每笔记录为锚定坐标下的点序列 `{ tool, color, width, points, bbox, anchor }`：绘制起点落在可滚动容器内时 `anchor` 为该容器、点坐标记在容器内容坐标系，否则 `anchor` 为 null、点坐标记在页面文档坐标系；渲染时由 `anchor.getBoundingClientRect()` 与容器滚动量推出 `setTransform` 偏移，因此整页滚动、内嵌容器滚动（含容器被带动）都跟随，并用 `ctx.clip()` 把笔画裁剪到容器的可见内容窗口（由 `scrollLeft/scrollTop` 与 `clientWidth/clientHeight` 推出），再与所有会裁剪内容的祖先容器（`overflow` 非 `visible`）的可见窗口求交，滚出任一层窗口的部分都不显示
 - 撤销 / 重做基于笔画列表的版本引用，内存开销小（上限 300 步）
 - 橡皮擦通过 `destination-out` 合成实现，重绘时按笔画顺序回放，与实时绘制结果一致
 

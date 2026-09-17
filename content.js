@@ -376,27 +376,66 @@
     return !(b.x1 < vx0 || b.x0 > vx1 || b.y1 < vy0 || b.y0 > vy1);
   }
 
+  // 元素是否会裁剪后代内容（overflow 非 visible 即裁剪；结果缓存，页面很少动态改它）
+  const clipperCache = new WeakMap();
+  function clipsContent(el) {
+    let v = clipperCache.get(el);
+    if (v === undefined) {
+      const cs = getComputedStyle(el);
+      v = cs.overflowX !== "visible" || cs.overflowY !== "visible";
+      clipperCache.set(el, v);
+    }
+    return v;
+  }
+
+  function intersectRects(a, b) {
+    const x = Math.max(a.x, b.x);
+    const y = Math.max(a.y, b.y);
+    const w = Math.min(a.x + a.w, b.x + b.w) - x;
+    const h = Math.min(a.y + a.h, b.y + b.h) - y;
+    return w > 0 && h > 0 ? { x, y, w, h } : { x: 0, y: 0, w: 0, h: 0 };
+  }
+
   // 锚定容器当前可见的内容窗口（笔画坐标系）：容器内容滚出这一窗口的
-  // 部分会被裁掉。返回 null 表示不裁剪（未锚定容器，或容器已被移除）。
-  function anchorClipRect(s) {
+  // 部分会被裁掉。再与所有会裁剪内容的祖先容器可见窗口求交，这样外层
+  // 容器把整块内容滚出视野时，内层笔画的显示同步消失。
+  // offset 为 strokeOffset 算出的屏幕偏移（与渲染变换保持一致）。
+  // 返回 null 表示不裁剪（未锚定容器，或容器已被移除）；w/h 为 0 表示完全不可见。
+  function anchorClipRect(s, offset) {
     if (!s.anchor || !s.anchor.isConnected) return null;
     const a = s.anchor;
-    return {
+    let clip = {
       x: a.scrollLeft + a.clientLeft,
       y: a.scrollTop + a.clientTop,
       w: a.clientWidth,
       h: a.clientHeight,
     };
+    let node = nextAncestor(a);
+    while (node) {
+      if (clipsContent(node)) {
+        const r = node.getBoundingClientRect();
+        clip = intersectRects(clip, {
+          x: r.left + node.clientLeft - offset.x,
+          y: r.top + node.clientTop - offset.y,
+          w: node.clientWidth,
+          h: node.clientHeight,
+        });
+        if (!clip.w || !clip.h) return clip; // 与祖先窗口已无交集，整笔不可见
+      }
+      node = nextAncestor(node);
+    }
+    return clip;
   }
 
   // 在锚定容器的可见窗口内绘制；整笔完全滚出窗口时不画。
-  // 调用前需先把变换设置到该笔画的坐标系。
-  function withAnchorClip(s, paint) {
-    const clip = anchorClipRect(s);
+  // 调用前需先把变换设置到该笔画的坐标系，offset 为该变换的偏移。
+  function withAnchorClip(s, offset, paint) {
+    const clip = anchorClipRect(s, offset);
     if (!clip) {
       paint();
       return;
     }
+    if (!clip.w || !clip.h) return; // 可见窗口已为空，整笔跳过
     const b = s.bbox;
     if (
       b &&
@@ -415,6 +454,7 @@
   function applyTransform(s) {
     const o = s ? strokeOffset(s) : { x: -window.scrollX, y: -window.scrollY };
     ctx.setTransform(dpr, 0, 0, dpr, o.x * dpr, o.y * dpr);
+    return o;
   }
 
   function renderStroke(s) {
@@ -455,12 +495,12 @@
       const offset = strokeOffset(s);
       if (!strokeVisible(s, offset)) continue; // 视口外跳过
       ctx.setTransform(dpr, 0, 0, dpr, offset.x * dpr, offset.y * dpr);
-      withAnchorClip(s, () => renderStroke(s));
+      withAnchorClip(s, offset, () => renderStroke(s));
     }
     if (currentStroke) {
       const offset = strokeOffset(currentStroke);
       ctx.setTransform(dpr, 0, 0, dpr, offset.x * dpr, offset.y * dpr);
-      withAnchorClip(currentStroke, () => renderStroke(currentStroke));
+      withAnchorClip(currentStroke, offset, () => renderStroke(currentStroke));
     }
 
     ctx.globalCompositeOperation = "source-over";
@@ -549,10 +589,10 @@
     // 预置屏幕偏移（client − 笔画坐标），容器若在首帧渲染前被移除也能按此冻结
     currentStroke.lastOffset = { x: e.clientX - p.x, y: e.clientY - p.y };
 
-    applyTransform(currentStroke);
+    const offset = applyTransform(currentStroke);
     applyStrokeStyle(currentStroke);
     // 点按也留下一个圆点
-    withAnchorClip(currentStroke, () => {
+    withAnchorClip(currentStroke, offset, () => {
       ctx.beginPath();
       ctx.arc(p.x, p.y, currentStroke.width / 2, 0, Math.PI * 2);
       ctx.fill();
@@ -567,12 +607,12 @@
     pts.push(p);
     growBBox(currentStroke, p.x, p.y);
 
-    applyTransform(currentStroke);
+    const offset = applyTransform(currentStroke);
     applyStrokeStyle(currentStroke);
     // 二次贝塞尔平滑：以相邻两点中点为控制终点
     const mx = (prev.x + p.x) / 2;
     const my = (prev.y + p.y) / 2;
-    withAnchorClip(currentStroke, () => {
+    withAnchorClip(currentStroke, offset, () => {
       ctx.beginPath();
       // 本段起点 = 上一对点的中点（第一段从起点开始画）
       if (pts.length >= 3) {
@@ -591,10 +631,10 @@
     drawing = false;
     if (currentStroke) {
       const pts = currentStroke.points;
-      applyTransform(currentStroke);
+      const offset = applyTransform(currentStroke);
       applyStrokeStyle(currentStroke);
       // 收尾：从最后一段的中点补画到落点
-      withAnchorClip(currentStroke, () => {
+      withAnchorClip(currentStroke, offset, () => {
         if (pts.length < 2) return;
         const prev = pts[pts.length - 2];
         const last = pts[pts.length - 1];
