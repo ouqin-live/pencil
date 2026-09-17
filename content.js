@@ -123,10 +123,21 @@
     .label .size-val { color: #ff9500; font-weight: 600; }
     .colors { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
     .swatch {
+      position: relative;
       width: 26px; height: 26px; border-radius: 50%; cursor: pointer;
       border: 2px solid transparent; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12);
+      transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
     }
-    .swatch.active { border-color: #ff9500; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12), 0 0 0 2px rgba(255,149,0,.35); }
+    .swatch.active {
+      border-color: #fff;
+      transform: scale(1.12);
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,.12), 0 0 0 2px #ff9500, 0 3px 8px rgba(255,149,0,.45);
+    }
+    .swatch.active::after {
+      content: ""; position: absolute; inset: 0; pointer-events: none;
+      background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M5.5 12.5l4.3 4.3L18.5 6.8' fill='none' stroke='white' stroke-width='4.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 13px 13px no-repeat;
+      filter: drop-shadow(0 0 1.2px rgba(0,0,0,.7));
+    }
     .swatch.custom {
       display: flex; align-items: center; justify-content: center; overflow: hidden;
       background: conic-gradient(#ff3b30,#ffcc00,#34c759,#007aff,#af52de,#ff3b30);

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Pencil 网页涂鸦",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "在任意网页上用画笔、橡皮擦涂鸦标注，支持颜色与粗细调节、一键清空、撤销重做。",
   "permissions": ["activeTab", "scripting", "storage"],
   "action": {
