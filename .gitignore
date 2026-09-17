@@ -1,0 +1,5 @@
+# macOS
+.DS_Store
+
+# 临时/测试产物
+.e2e/

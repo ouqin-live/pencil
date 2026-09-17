@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Pencil 网页涂鸦",
+  "version": "1.0.0",
+  "description": "在任意网页上用画笔、橡皮擦涂鸦标注，支持颜色与粗细调节、一键清空、撤销重做。",
+  "permissions": ["activeTab", "scripting"],
+  "action": {
+    "default_title": "Pencil 涂鸦 (Alt+P)",
+    "default_icon": { "128": "icons/icon128.png" }
+  },
+  "icons": { "128": "icons/icon128.png" },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": { "default": "Alt+P" },
+      "description": "开启 / 关闭涂鸦模式"
+    }
+  }
+}
