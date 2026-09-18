@@ -59,9 +59,14 @@
   bar.innerHTML = `
     <div class="head">
       <span class="title">Pencil</span>
-      <button class="icon close" title="关闭 (Esc)" data-tip="关闭 (Esc)">
-        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
-      </button>
+      <span class="head-btns">
+        <button class="icon collapse" title="收起">
+          <svg viewBox="0 0 24 24"><polyline points="6 15 12 9 18 15"/></svg>
+        </button>
+        <button class="icon close" title="关闭 (Esc)" data-tip="关闭 (Esc)">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </span>
     </div>
 
     <div class="row tools">
@@ -107,9 +112,15 @@
       background: #ffffff; border: 1px solid rgba(0,0,0,.08); border-radius: 14px;
       box-shadow: 0 8px 28px rgba(0,0,0,.18); padding: 10px 12px 12px;
       pointer-events: auto; user-select: none; color: #1c1c1e;
+      transition: opacity .15s ease;
     }
-    .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; cursor: grab; }
+    .bar.dim { opacity: .22; }
+    .bar.collapsed { width: auto; padding: 8px 10px; }
+    .bar.collapsed > :not(.head) { display: none; }
+    .head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; cursor: grab; }
+    .bar.collapsed .head { margin-bottom: 0; }
     .head:active { cursor: grabbing; }
+    .head-btns { display: flex; align-items: center; gap: 4px; }
     .title { font-size: 14px; font-weight: 600; }
     .row { display: flex; gap: 8px; }
     .row.tools .tool {
@@ -154,8 +165,10 @@
     .icon:disabled { opacity: .35; cursor: default; }
     .icon:disabled:hover { background: #f2f2f7; }
     .icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-    .icon.close { width: 28px; height: 28px; background: transparent; }
-    .icon.close:hover { background: #f2f2f7; }
+    .icon.close, .icon.collapse { width: 28px; height: 28px; background: transparent; }
+    .icon.close:hover, .icon.collapse:hover { background: #f2f2f7; }
+    .icon.collapse svg { transition: transform .15s ease; }
+    .bar.collapsed .icon.collapse svg { transform: rotate(180deg); }
     .icon.clear { color: #ff3b30; }
     .hint { margin-top: 10px; font-size: 11px; color: #aeaeb2; text-align: center; }
   `;
@@ -589,6 +602,7 @@
     if (!state.active || e.button !== 0) return;
     e.preventDefault();
     drawing = true;
+    bar.classList.add("dim"); // 绘制时面板变淡，不挡视线
     try {
       canvas.setPointerCapture(e.pointerId);
     } catch (err) {}
@@ -648,6 +662,7 @@
   function endStroke(e) {
     if (!drawing) return;
     drawing = false;
+    bar.classList.remove("dim");
     if (currentStroke) {
       const pts = currentStroke.points;
       const offset = applyTransform(currentStroke);
@@ -796,10 +811,17 @@
   // 关闭
   $(".close").addEventListener("click", () => setActive(false));
 
+  // 收起 / 展开（收成小条不挡视线，点击箭头切换）
+  const collapseBtn = $(".collapse");
+  collapseBtn.addEventListener("click", () => {
+    const collapsed = bar.classList.toggle("collapsed");
+    collapseBtn.title = collapsed ? "展开" : "收起";
+  });
+
   // 拖拽工具栏（按住标题栏）
   const head = $(".head");
   head.addEventListener("pointerdown", (e) => {
-    if (e.target.closest(".close")) return;
+    if (e.target.closest(".icon")) return;
     const rect = bar.getBoundingClientRect();
     bar.style.right = "auto";
     bar.style.left = rect.left + "px";
@@ -862,6 +884,7 @@
   function setActive(on) {
     state.active = on;
     bar.hidden = !on;
+    if (!on) bar.classList.remove("dim"); // 中途退出时恢复面板透明度
     syncCanvasPointer();
     if (on) scheduleRender(); // 关闭期间页面可能滚动了，重新对齐涂鸦位置
   }
